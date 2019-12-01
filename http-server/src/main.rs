@@ -1,7 +1,8 @@
-use std::io::Read;
+use std::io::Write;
 use std::net::{TcpStream, TcpListener};
 use std::thread;
 use std::collections::HashMap;
+use std::io::Read;
 
 const SERVER_IP: &str = "127.0.0.1";
 const SERVER_PORT: u16 = 8080;
@@ -13,8 +14,8 @@ fn handle_conn(stream: TcpStream) {
 
     let mut header_buffer = Vec::new();
     let mut header_read = false;
-
-    for byte in stream.bytes() {
+    let mut stream_ref = stream.by_ref();
+    for byte in stream_ref.bytes() {
         match byte {
             Ok(x) => {
                 header_buffer.push(x);
@@ -47,8 +48,7 @@ fn handle_conn(stream: TcpStream) {
         }
     }
 
-    let mut header_map: HashMap<&str, &str> = HashMap::new();
-    let mut header_field;
+    let mut header_map: HashMap<String, String> = HashMap::new();
 
     for (i, line) in header.split(CRLF_STR).enumerate() {
         if i == 0 {
@@ -60,17 +60,17 @@ fn handle_conn(stream: TcpStream) {
             }
     
             // TODO: Validate before inserting items in the hash map
-            header_map.insert("method", words[0]);
-            header_map.insert("url", words[1]);
-            header_map.insert("http_version", words[2].trim_start_matches("HTTP/"));
+            header_map.insert(String::from("method"), String::from(words[0]));
+            header_map.insert(String::from("url"), String::from(words[1]));
+            header_map.insert(String::from("http_version"), String::from(words[2].trim_start_matches("HTTP/")));
         } else {
             let field_value: Vec<&str> = line.trim().split(":").collect();
             if field_value.len() != 2 {
                 continue;
             } else {
                 // TODO: Deal with the HTTP fields which has multiple values or key-value pairs within the value part
-                header_field = String::from(field_value[0]).to_lowercase();
-                header_map.insert(&header_field, field_value[1]);
+                let header_field = String::from(field_value[0]).to_lowercase();
+                header_map.insert(header_field, String::from(field_value[1]));
             }
         }
     }
@@ -83,11 +83,13 @@ fn handle_conn(stream: TcpStream) {
             match x.parse::<u32>() {
                 Ok(x) => {
                     content_length = x;
-                    for byte in stream.bytes() {
-                        body_buffer.push(byte);
-                        content_length -= 1;
-                        if content_length == 0 {
-                            break;
+                    if content_length > 0 {
+                        for byte in stream_ref.bytes() {
+                            body_buffer.push(byte);
+                            content_length -= 1;
+                            if content_length == 0 {
+                                break;
+                            }
                         }
                     }
                 },
@@ -106,6 +108,8 @@ fn handle_conn(stream: TcpStream) {
     // Process the header and the body
 
     // Send response
+    let response = "200 OK\r\nContent-Type: 2\r\n\r\nHi";
+    stream_ref.write(response.as_bytes());
 }
 
 fn main() {
