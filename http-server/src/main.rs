@@ -1,20 +1,19 @@
-use std::io::Write;
+use std::ops::Add;
+use std::io::{Read, Write};
 use std::net::{TcpStream, TcpListener};
 use std::thread;
 use std::collections::HashMap;
-use std::io::Read;
 
 const SERVER_IP: &str = "127.0.0.1";
 const SERVER_PORT: u16 = 8080;
 
-const CRLF_STR: &str = "\r\n";
+const CRLF: &str = "\r\n";
 const DOUBLE_CRLF_ASCII: [u8; 4] = ['\r' as u8, '\n' as u8, '\r' as u8, '\n' as u8];
 
-fn handle_conn(stream: TcpStream) {
-
-    let mut header_buffer = Vec::new();
+fn handle_conn(mut stream: TcpStream) {
+    let mut header_buffer: Vec<u8> = Vec::new();
     let mut header_read = false;
-    let mut stream_ref = stream.by_ref();
+    let stream_ref = Read::by_ref(&mut stream);
     for byte in stream_ref.bytes() {
         match byte {
             Ok(x) => {
@@ -40,7 +39,7 @@ fn handle_conn(stream: TcpStream) {
 
     match String::from_utf8(header_buffer) {
         Ok(x) => {
-            header = x
+            header = x;
         },
         Err(error) => {
             eprintln!("Error: {:?}", error);
@@ -50,15 +49,15 @@ fn handle_conn(stream: TcpStream) {
 
     let mut header_map: HashMap<String, String> = HashMap::new();
 
-    for (i, line) in header.split(CRLF_STR).enumerate() {
+    for (i, line) in header.split(CRLF).enumerate() {
         if i == 0 {
             // Parse the first line => GET /url HTTP/1.1
             let words: Vec<&str> = line.split(" ").collect();
-    
+
             if words.len() != 3 {
                 return;
             }
-    
+
             // TODO: Validate before inserting items in the hash map
             header_map.insert(String::from("method"), String::from(words[0]));
             header_map.insert(String::from("url"), String::from(words[1]));
@@ -69,29 +68,17 @@ fn handle_conn(stream: TcpStream) {
                 continue;
             } else {
                 // TODO: Deal with the HTTP fields which has multiple values or key-value pairs within the value part
-                let header_field = String::from(field_value[0]).to_lowercase();
-                header_map.insert(header_field, String::from(field_value[1]));
+                header_map.insert(field_value[0].to_lowercase(), String::from(field_value[1]));
             }
         }
     }
 
-    let mut body_buffer = Vec::new();
-
+    let mut content_length = 0;
     match header_map.get("content-length") {
         Some(x) => {
-            let mut content_length;
             match x.parse::<u32>() {
                 Ok(x) => {
                     content_length = x;
-                    if content_length > 0 {
-                        for byte in stream_ref.bytes() {
-                            body_buffer.push(byte);
-                            content_length -= 1;
-                            if content_length == 0 {
-                                break;
-                            }
-                        }
-                    }
                 },
                 Err(error) => {
                     eprintln!("Error: {:?}", error);
@@ -101,23 +88,63 @@ fn handle_conn(stream: TcpStream) {
         None => {}
     }
 
-    // Create a new Vector for http-body
+    let mut body_buffer: Vec<u8> = Vec::new();
+    if content_length > 0 {
+        for byte in stream_ref.bytes() {
+            match byte {
+                Ok(x) => {
+                    body_buffer.push(x);
+                    content_length -= 1;
+                    if content_length == 0 {
+                        break;
+                    }
+                },
+                Err(error) => {
+                    eprintln!("Error: {:?}", error);
+                    return;
+                }
+            }
+        }
+    }
 
-    // Read from TcpStream and copy the no. of bytes mentioned in the "Content-Length" header
+    let mut body = String::new();
+    match String::from_utf8(body_buffer) {
+        Ok(x) => {
+            body += &x;
+        },
+        Err(error) => {
+            eprintln!("Error: {:?}", error);
+        }
+    }
 
-    // Process the header and the body
+    println!("\n--------------HTTP Request---------");
+    println!("{}{}", header, body);
+    println!("--------------END---------\n");
 
-    // Send response
-    let response = "200 OK\r\nContent-Type: 2\r\n\r\nHi";
-    stream_ref.write(response.as_bytes());
+    // TODO: Change these based on the endpoint
+    let response_body = "Hi";
+    let response_length = response_body.len().to_string();
+    let content_type = "text/plain";
+
+    let mut response = String::new();
+    response = response.add("HTTP/1.1 200 OK").add(CRLF);
+    response = response.add("Connection: close").add(CRLF);
+    response = response.add("Content-Type: ").add(&content_type).add(CRLF);
+    response = response.add("Content-Length: ").add(&response_length).add(CRLF).add(CRLF);
+    response = response.add(response_body);
+
+    println!("\n--------------HTTP Response---------");
+    println!("{}", response);
+    println!("--------------END---------\n");
+
+    let response_bytes: Vec<u8> = response.chars().map(|x| x as u8).collect();
+    match stream.write(&response_bytes) {
+        Err(error) => println!("Error: {:?}", error),
+        _ => {}
+    }
 }
 
 fn main() {
-
-    let buffer = vec!['a' as u8, 'b' as u8, 'C' as u8, 'D' as u8, '*' as u8, '%' as u8,];
-
-    println!("{}", String::from_utf8(buffer).unwrap());
-
     let listener = match TcpListener::bind((SERVER_IP, SERVER_PORT)) {
         Ok(x) => x,
         Err(error) => {
