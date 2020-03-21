@@ -10,6 +10,18 @@ const SERVER_PORT: u16 = 8080;
 const CRLF: &str = "\r\n";
 const DOUBLE_CRLF_ASCII: [u8; 4] = ['\r' as u8, '\n' as u8, '\r' as u8, '\n' as u8];
 
+/*
+struct HttpRequest {
+    header: HashMap<String, String>,
+    body: Vec<u8>
+}
+
+
+fn parse_request(stream: &TcpStream) -> HttpRequest {
+
+}
+*/
+
 fn handle_conn(mut stream: TcpStream) {
     let mut header_buffer: Vec<u8> = Vec::new();
     let mut header_read = false;
@@ -61,9 +73,9 @@ fn handle_conn(mut stream: TcpStream) {
             // TODO: Validate before inserting items in the hash map
             header_map.insert(String::from("method"), String::from(words[0]));
             header_map.insert(String::from("url"), String::from(words[1]));
-            header_map.insert(String::from("http_version"), String::from(words[2].trim_start_matches("HTTP/")));
+            header_map.insert(String::from("http-version"), String::from(words[2].trim_start_matches("HTTP/")));
         } else {
-            let field_value: Vec<&str> = line.trim().split(":").collect();
+            let field_value: Vec<&str> = line.split(":").map(|x| x.trim()).collect();
             if field_value.len() != 2 {
                 continue;
             } else {
@@ -118,7 +130,8 @@ fn handle_conn(mut stream: TcpStream) {
     }
 
     println!("\n--------------HTTP Request---------");
-    println!("{}{}", header, body);
+    println!("{:?}\n", header_map);
+    println!("{}", body);
     println!("--------------END---------\n");
 
     // TODO: Change these based on the endpoint
