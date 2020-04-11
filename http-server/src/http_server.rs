@@ -4,10 +4,12 @@ use std::collections::HashMap;
 use std::net:: { TcpListener, TcpStream };
 use std::thread;
 use std::io;
+use std::sync::Arc;
+use std::ops::Deref;
 
 type HttpRequestHandler = fn(HashMap<String, String>, Vec<u8>);
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 enum HttpMethod {
     GET,
     POST,
@@ -17,10 +19,12 @@ enum HttpMethod {
 }
 
 struct HttpRequest {
+    socket: TcpStream,
     header: HashMap<String, String>,
     body: Vec<u8>
 }
 
+#[derive(Clone)]
 struct HttpEndpoint {
     url: String,
     method: HttpMethod,
@@ -35,8 +39,7 @@ impl HttpServer {
     pub fn new() -> HttpServer {
         HttpServer { endpoints: Vec::new() }
     }
-    fn add(&mut self, url: String, method: HttpMethod,
-            cb: HttpRequestHandler) {
+    fn add(&mut self, url: String, method: HttpMethod, cb: HttpRequestHandler) {
         self.endpoints.push(HttpEndpoint {
             url: url,
             method: method,
@@ -56,24 +59,26 @@ impl HttpServer {
         self.add(url.clone(), HttpMethod::DELETE, callback);
     }
     fn parse_request(stream: TcpStream) -> HttpRequest {
-        HttpRequest { header: HashMap::new(), body: Vec::new() }
+        HttpRequest { socket: stream, header: HashMap::new(), body: Vec::new() }
     }
-    fn get_request_handler(&self, url: &String, method: HttpMethod) -> Option<HttpRequestHandler> {
-        for endpoint in self.endpoints {
+    fn get_request_handler(endpoints: &Vec<HttpEndpoint>, url: &String, method: HttpMethod) -> Option<HttpRequestHandler> {
+        for endpoint in endpoints {
             if (method == endpoint.method) && (url == &endpoint.url) {
                 return Some(endpoint.callback);
             }
         }
         None
     }
-    pub fn run(&mut self, ip: &str, port: u16) -> io::Result<()> {
+    pub fn run(&self, ip: &str, port: u16) -> io::Result<()> {
+        let endpoints = Arc::new(self.endpoints.clone());
         let listener = TcpListener::bind((ip, port))?;
-    
+
         /* TcpListener::incoming() does accept() & returns the Result<TcpStream> */
         for conn in listener.incoming() {
-            let mut stream = conn?;
+            let stream = conn?;
+            let endpoints_ref = endpoints.clone();
             thread::spawn(move || {
-                let mut request = HttpServer::parse_request(stream);
+                let request = HttpServer::parse_request(stream);
                 let method: HttpMethod;
                 match request.header.get("method") {
                     Some(x) => { 
@@ -100,7 +105,7 @@ impl HttpServer {
                         return;
                     }
                 }
-                match self.get_request_handler(url, method) {
+                match HttpServer::get_request_handler(endpoints_ref.deref(), url, method) {
                     Some(cb) => {
                         cb(request.header, request.body);
                     }

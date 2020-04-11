@@ -1,3 +1,5 @@
+mod http_server;
+
 use std::ops::Add;
 use std::io::{Read, Write};
 use std::net::{TcpStream, TcpListener};
