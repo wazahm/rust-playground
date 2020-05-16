@@ -1,16 +1,39 @@
-#![allow(dead_code)]
+#![allow(unused, dead_code)]
 
 use std::collections::HashMap;
-use std::net:: { TcpListener, TcpStream };
+use std::net:: { TcpListener, TcpStream, Shutdown };
 use std::io;
-use std::io::Read;
 use std::thread;
 use std::error::Error;
 use std::sync::Arc;
-use std::ops::Deref;
+use std::ops:: { Add, Deref };
+use serde::{ Serialize, Deserialize };
+use serde_json::Result as SerdeResult;
+use std::io::{ Read, Write };
+use std::convert::TryFrom;
 
+const HTTP_VERSION: &str = "HTTP/1.1";
 const CRLF: &str = "\r\n";
 const DOUBLE_CRLF_ASCII: [u8; 4] = ['\r' as u8, '\n' as u8, '\r' as u8, '\n' as u8];
+
+const IANA_HTTP_RESPONSE_STATUS: [(u16, &str); 12] = [
+    (200, "OK"),
+    (301, "Moved Permanently"),
+    (302, "Found"),
+    (304, "Not Modified"),
+    (400, "Bad Request"),
+    (401, "Unauthorized"),
+    (403, "Forbidden"),
+    (404, "NotFound"),
+    (500, "Internal Server Error"),
+    (502, "Bad Gateway"),
+    (503, "Service Not Available"),
+    (505, "HTTP Version Not Supported")
+    // TODO: Add all the IANA registered HTTP Response Codes/Reasons
+];
+
+const DEFAULT_RESPONSE_STATUS_CODE: u16 = IANA_HTTP_RESPONSE_STATUS[0].0;
+const DEFAULT_RESPONSE_STATUS_REASON: &str = IANA_HTTP_RESPONSE_STATUS[0].1;
 
 type HttpRequestHandler = fn(HttpRequest, HttpResponse);
 
@@ -28,13 +51,89 @@ pub struct HttpRequest {
     pub body: Vec<u8>
 }
 
+struct HttpResponseStatus {
+    code: u16,
+    reason: String
+}
+
 pub struct HttpResponse {
+    status: HttpResponseStatus,
+    header: HashMap<&'static str, String>,
+    header_sent: bool,
+    has_body: bool,
+    body: Vec<u8>,
     socket: TcpStream
 }
 
 impl HttpResponse {
     pub fn new(socket: TcpStream) -> HttpResponse {
-        HttpResponse { socket: socket }
+        let status = HttpResponseStatus {
+            code: DEFAULT_RESPONSE_STATUS_CODE,
+            reason: DEFAULT_RESPONSE_STATUS_REASON.to_string()
+        };
+
+        let mut header: HashMap<&'static str, String> = HashMap::new();
+        header.insert("Transfer-Encoding", String::from("chunked"));
+        header.insert("Connection", String::from("close"));
+
+        HttpResponse {
+            status,
+            header,
+            header_sent: false,
+            has_body: false,
+            body: Vec::new(),
+            socket
+        }
+    }
+    pub fn status(&mut self, status: u16) -> &mut Self {
+        self.status.code = status;
+
+        // If the given code is not a IANA registered status code,
+        // then by default the reason will be set to "unknown".
+        self.status.reason = "unknown".to_string();
+
+        for (code, reason) in &IANA_HTTP_RESPONSE_STATUS {
+            if *code == status {
+                self.status.reason = reason.to_string();
+            }
+        }
+
+        self
+    }
+    pub fn status_message(&mut self, message: &str) -> &mut Self {
+        self.status.reason = message.to_string();
+        self
+    }
+    fn send_header(&mut self) -> Result<(), io::Error> {
+        let sock = Write::by_ref(&mut self.socket);
+        let mut line = String::from(HTTP_VERSION).add(" ")
+                        .add(&self.status.code.to_string()).add(" ")
+                        .add(&self.status.reason).add(CRLF);
+        sock.write(line.as_bytes())?;
+
+        for (key, value) in &self.header {
+            line = String::from(*key).add(": ").add(value).add(CRLF);
+            sock.write(line.as_bytes())?;
+        }
+
+        sock.write(CRLF.as_bytes())?;
+        Ok(())
+    }
+    pub fn end(&mut self) -> Result<(), io::Error> {
+        if !self.header_sent {
+            self.send_header();
+        }
+
+        let sock = Write::by_ref(&mut self.socket);
+
+        if self.has_body {
+            sock.write(&['0' as u8])?;
+            sock.write(&DOUBLE_CRLF_ASCII)?;
+        }
+
+        sock.flush()?;
+        sock.shutdown(Shutdown::Both)?;
+        Ok(())
     }
 }
 
@@ -75,7 +174,7 @@ impl HttpServer {
     fn parse_request(stream: &mut TcpStream) -> Result<HttpRequest, Box<dyn Error>> {
         let mut header_buffer: Vec<u8> = Vec::new();
         let mut header_read = false;
-        let stream_ref = stream.by_ref();
+        let stream_ref = Read::by_ref(stream);
         //let stream_ref = Read::by_ref(&mut stream);
         for _byte in stream_ref.bytes() {
             let byte = _byte?;
@@ -180,7 +279,7 @@ impl HttpServer {
 
                 let method: HttpMethod;
                 match request.header.get("method") {
-                    Some(x) => { 
+                    Some(x) => {
                         method = match x.as_str() {
                             "GET" => HttpMethod::GET,
                             "POST" => HttpMethod::POST,

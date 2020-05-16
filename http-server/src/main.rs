@@ -1,11 +1,13 @@
 mod http_server;
+mod consume;
 
 use http_server::HttpServer;
 use serde::{Serialize, Deserialize};
 use serde_json::Result as SerdeResult;
+use consume::Consume;
 
 const SERVER_IP: &str = "127.0.0.1";
-const SERVER_PORT: u16 = 8080;
+const SERVER_PORT: u16 = 3000;
 
 #[derive(Deserialize, Debug)]
 struct HelloRequest {
@@ -20,6 +22,14 @@ struct HelloResponse {
 fn main() {
     let mut server = HttpServer::new();
 
+    server.get("/", | _request, mut response | {
+        let ret = response.status(400).end();
+        if let Err(x) = ret {
+            eprintln!("Error: {}", x);
+        }
+    });
+
+    /*
     server.post("/hello", | request, response | {
         let json_body: SerdeResult<HelloRequest> = serde_json::from_slice(&request.body);
         match json_body {
@@ -34,6 +44,10 @@ fn main() {
             }
         }
     });
+    */
 
-    server.run(SERVER_IP, SERVER_PORT);
+    let ret = server.run(SERVER_IP, SERVER_PORT);
+    if let Err(x) = ret {
+        eprintln!("Error: {}", x);
+    }
 }
