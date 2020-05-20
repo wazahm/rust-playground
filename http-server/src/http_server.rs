@@ -14,6 +14,7 @@ use std::convert::TryFrom;
 
 const HTTP_VERSION: &str = "HTTP/1.1";
 const CRLF: &str = "\r\n";
+const DOUBLE_CRLF: &str = "\r\n\r\n";
 const DOUBLE_CRLF_ASCII: [u8; 4] = ['\r' as u8, '\n' as u8, '\r' as u8, '\n' as u8];
 
 const IANA_HTTP_RESPONSE_STATUS: [(u16, &str); 12] = [
@@ -115,9 +116,14 @@ impl HttpResponse {
             line = String::from(*key).add(": ").add(value).add(CRLF);
             sock.write(line.as_bytes())?;
         }
-
         sock.write(CRLF.as_bytes())?;
+
+        self.header_sent = true;
+
         Ok(())
+    }
+    fn get_chunk_size(chunk: &str) -> String {
+        return format!("{:X}", chunk.as_bytes().len());
     }
     pub fn end(&mut self) -> Result<(), io::Error> {
         if !self.header_sent {
@@ -127,12 +133,31 @@ impl HttpResponse {
         let sock = Write::by_ref(&mut self.socket);
 
         if self.has_body {
-            sock.write(&['0' as u8])?;
-            sock.write(&DOUBLE_CRLF_ASCII)?;
+            sock.write(Self::get_chunk_size("").as_bytes())?;
+            sock.write(DOUBLE_CRLF.as_bytes())?;
         }
 
         sock.flush()?;
         sock.shutdown(Shutdown::Both)?;
+        Ok(())
+    }
+    pub fn write(&mut self, msg: &str) -> Result<(), io::Error> {
+        if !self.header_sent {
+            self.send_header();
+        }
+
+        let sock = Write::by_ref(&mut self.socket);
+
+        sock.write(Self::get_chunk_size(msg).as_bytes())?;
+        sock.write(CRLF.as_bytes())?;
+
+        sock.write(msg.as_bytes())?;
+        sock.write(CRLF.as_bytes())?;
+
+        if !self.has_body {
+            self.has_body = true;
+        }
+
         Ok(())
     }
 }
@@ -259,8 +284,8 @@ impl HttpServer {
     }
     pub fn run(&self, ip: &str, port: u16) -> io::Result<()> {
         let endpoints = Arc::new(self.endpoints.clone());
-        let listener = TcpListener::bind((ip, port))?;
 
+        let listener = TcpListener::bind((ip, port))?;
         /* TcpListener::incoming() does accept() & returns the Result<TcpStream> */
         for conn in listener.incoming() {
             let mut stream = conn?;

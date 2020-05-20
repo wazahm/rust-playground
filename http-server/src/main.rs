@@ -3,6 +3,7 @@ mod consume;
 
 use http_server::HttpServer;
 use serde::{Serialize, Deserialize};
+use std::io;
 use serde_json::Result as SerdeResult;
 use consume::Consume;
 
@@ -23,8 +24,14 @@ fn main() {
     let mut server = HttpServer::new();
 
     server.get("/", | _request, mut response | {
-        let ret = response.status(400).end();
-        if let Err(x) = ret {
+        let mut handler = || -> Result<(), io::Error> {
+            response.status(200);
+            response.write("Hello World\r\n")?;
+            response.write("This is a test\r\n")?;
+            response.end()?;
+            Ok(())
+        };
+        if let Err(x) = handler() {
             eprintln!("Error: {}", x);
         }
     });
