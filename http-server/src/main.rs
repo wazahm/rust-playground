@@ -6,6 +6,7 @@ use serde::{Serialize, Deserialize};
 use std::io;
 use serde_json::Result as SerdeResult;
 use consume::Consume;
+use std::convert::From;
 
 const SERVER_IP: &str = "127.0.0.1";
 const SERVER_PORT: u16 = 3000;
@@ -25,11 +26,77 @@ fn main() {
 
     server.get("/", | _request, mut response | {
         let mut handler = || -> Result<(), io::Error> {
+            response.redirect("/hi")
+        };
+        if let Err(x) = handler() {
+            eprintln!("Error: {}", x);
+        }
+    });
+
+    server.get("/hello-world", | _request, mut response | {
+        let mut handler = || -> Result<(), io::Error> {
             response.status(200);
-            response.write("Hello World\r\n")?;
-            response.write("This is a test\r\n")?;
-            response.end()?;
-            Ok(())
+            response.write("Hello ")?;
+            response.write("World")?;
+            response.write("\r\n")?;
+            response.end()
+        };
+        if let Err(x) = handler() {
+            eprintln!("Error: {}", x);
+        }
+    });
+
+    server.get("/hello", | _request, mut response | {
+        let mut handler = || -> Result<(), io::Error> {
+            let hello_str = String::from("Hello");
+            let msg = HelloResponse { message: hello_str };
+            response.json(&msg)
+        };
+        if let Err(x) = handler() {
+            eprintln!("Error: {}", x);
+        }
+    });
+
+    server.get("/hi", | _request, mut response | {
+        let mut handler = || -> Result<(), io::Error> {
+            response.content_type("text/html");
+            response.status(200).send("<h1>Hello!</h1>")
+        };
+        if let Err(x) = handler() {
+            eprintln!("Error: {}", x);
+        }
+    });
+
+    server.get("/file/json", | _request, mut response | {
+        let mut handler = || -> Result<(), io::Error> {
+            response.send_file("test.json")
+        };
+        if let Err(x) = handler() {
+            eprintln!("Error: {}", x);
+        }
+    });
+
+    server.get("/file/image", | _request, mut response | {
+        let mut handler = || -> Result<(), io::Error> {
+            response.send_file("/home/debian/workspace/wazahm/soap-bubble.jpg")
+        };
+        if let Err(x) = handler() {
+            eprintln!("Error: {}", x);
+        }
+    });
+
+    server.get("/file/octet", | _request, mut response | {
+        let mut handler = || -> Result<(), io::Error> {
+            response.send_file("/home/debian/workspace/wazahm/soap-bubble")
+        };
+        if let Err(x) = handler() {
+            eprintln!("Error: {}", x);
+        }
+    });
+
+    server.get("/download", | _request, mut response | {
+        let mut handler = || -> Result<(), io::Error> {
+            response.download("/home/debian/workspace/wazahm/soap-bubble.jpg")
         };
         if let Err(x) = handler() {
             eprintln!("Error: {}", x);

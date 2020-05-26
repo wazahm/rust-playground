@@ -4,13 +4,15 @@ use std::collections::HashMap;
 use std::net:: { TcpListener, TcpStream, Shutdown };
 use std::io;
 use std::thread;
+use std::path::Path;
+use std::fs::File;
 use std::error::Error;
 use std::sync::Arc;
 use std::ops:: { Add, Deref };
 use serde::{ Serialize, Deserialize };
 use serde_json::Result as SerdeResult;
 use std::io::{ Read, Write };
-use std::convert::TryFrom;
+use mime_guess;
 
 const HTTP_VERSION: &str = "HTTP/1.1";
 const CRLF: &str = "\r\n";
@@ -36,6 +38,34 @@ const IANA_HTTP_RESPONSE_STATUS: [(u16, &str); 12] = [
 const DEFAULT_RESPONSE_STATUS_CODE: u16 = IANA_HTTP_RESPONSE_STATUS[0].0;
 const DEFAULT_RESPONSE_STATUS_REASON: &str = IANA_HTTP_RESPONSE_STATUS[0].1;
 
+pub trait ToBytes {
+    fn to_bytes(&self) -> &[u8];
+}
+
+impl ToBytes for &[u8] {
+    fn to_bytes(&self) -> &[u8] {
+        self
+    }
+}
+
+impl ToBytes for &str {
+    fn to_bytes(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl ToBytes for String {
+    fn to_bytes(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl ToBytes for &String {
+    fn to_bytes(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
 type HttpRequestHandler = fn(HttpRequest, HttpResponse);
 
 #[derive(PartialEq, Clone)]
@@ -45,6 +75,27 @@ enum HttpMethod {
     PUT,
     DELETE,
     NONE
+}
+
+pub struct HttpHeader {
+    data: HashMap<String, String>,
+}
+impl HttpHeader {
+    pub fn new() -> HttpHeader {
+        HttpHeader { data: HashMap::new() }
+    }
+    pub fn get(&self, header: &str) -> Option<&String> {
+        self.data.get(header)
+    }
+    pub fn set(&mut self, header: &str, value: &str) {
+        self.data.insert(header.to_string(), value.to_string());
+    }
+    pub fn remove(&mut self, header: &str) {
+        self.data.remove(header);
+    }
+    pub fn to_map(&self) -> &HashMap<String, String> {
+        &self.data
+    }
 }
 
 pub struct HttpRequest {
@@ -59,32 +110,61 @@ struct HttpResponseStatus {
 
 pub struct HttpResponse {
     status: HttpResponseStatus,
-    header: HashMap<&'static str, String>,
+    pub header: HttpHeader,
     header_sent: bool,
-    has_body: bool,
+    chunked_body: bool,
     body: Vec<u8>,
     socket: TcpStream
 }
 
 impl HttpResponse {
-    pub fn new(socket: TcpStream) -> HttpResponse {
+    fn new(socket: TcpStream) -> HttpResponse {
         let status = HttpResponseStatus {
             code: DEFAULT_RESPONSE_STATUS_CODE,
             reason: DEFAULT_RESPONSE_STATUS_REASON.to_string()
         };
 
-        let mut header: HashMap<&'static str, String> = HashMap::new();
-        header.insert("Transfer-Encoding", String::from("chunked"));
-        header.insert("Connection", String::from("close"));
+        let mut header = HttpHeader::new();
+        Self::add_default_headers(&mut header);
 
         HttpResponse {
             status,
             header,
             header_sent: false,
-            has_body: false,
+            chunked_body: false,
             body: Vec::new(),
             socket
         }
+    }
+    fn add_default_headers(header: &mut HttpHeader) {
+        header.set("Connection", "close");
+    }
+    fn send_header(&mut self) -> Result<(), io::Error> {
+        let sock = Write::by_ref(&mut self.socket);
+        let mut line = String::from(HTTP_VERSION).add(" ")
+                        .add(&self.status.code.to_string()).add(" ")
+                        .add(&self.status.reason).add(CRLF);
+        sock.write(line.as_bytes())?;
+
+        for (key, value) in self.header.to_map() {
+            if !key.is_empty() && !value.is_empty() {
+                line = key.to_string().add(": ").add(value).add(CRLF);
+                sock.write(line.as_bytes())?;
+            }
+        }
+        sock.write(CRLF.as_bytes())?;
+
+        self.header_sent = true;
+
+        Ok(())
+    }
+    fn sock_close(&mut self) -> Result<(), io::Error> {
+        let sock = Write::by_ref(&mut self.socket);
+        sock.flush()?;
+        sock.shutdown(Shutdown::Both)
+    }
+    fn get_chunk_size(chunk: &[u8]) -> String {
+        return format!("{:X}", chunk.len());
     }
     pub fn status(&mut self, status: u16) -> &mut Self {
         self.status.code = status;
@@ -105,60 +185,90 @@ impl HttpResponse {
         self.status.reason = message.to_string();
         self
     }
-    fn send_header(&mut self) -> Result<(), io::Error> {
-        let sock = Write::by_ref(&mut self.socket);
-        let mut line = String::from(HTTP_VERSION).add(" ")
-                        .add(&self.status.code.to_string()).add(" ")
-                        .add(&self.status.reason).add(CRLF);
-        sock.write(line.as_bytes())?;
-
-        for (key, value) in &self.header {
-            line = String::from(*key).add(": ").add(value).add(CRLF);
-            sock.write(line.as_bytes())?;
+    pub fn write(&mut self, data: impl ToBytes) -> Result<(), io::Error> {
+        if !self.header_sent {
+            self.header.set("Transfer-Encoding", "chunked");
+            self.send_header()?;
         }
+
+        let sock = Write::by_ref(&mut self.socket);
+
+        let data = data.to_bytes();
+        sock.write(Self::get_chunk_size(data).as_bytes())?;
         sock.write(CRLF.as_bytes())?;
 
-        self.header_sent = true;
+        sock.write(data)?;
+        sock.write(CRLF.as_bytes())?;
+
+        if !self.chunked_body {
+            self.chunked_body = true;
+        }
 
         Ok(())
-    }
-    fn get_chunk_size(chunk: &str) -> String {
-        return format!("{:X}", chunk.as_bytes().len());
     }
     pub fn end(&mut self) -> Result<(), io::Error> {
         if !self.header_sent {
-            self.send_header();
+            self.send_header()?;
         }
 
         let sock = Write::by_ref(&mut self.socket);
 
-        if self.has_body {
-            sock.write(Self::get_chunk_size("").as_bytes())?;
+        if self.chunked_body {
+            sock.write(&['0' as u8])?;
             sock.write(DOUBLE_CRLF.as_bytes())?;
         }
-
-        sock.flush()?;
-        sock.shutdown(Shutdown::Both)?;
-        Ok(())
+        self.sock_close()
     }
-    pub fn write(&mut self, msg: &str) -> Result<(), io::Error> {
+    pub fn send(&mut self, data: impl ToBytes) -> Result<(), io::Error> {
+        let data = data.to_bytes();
+
         if !self.header_sent {
-            self.send_header();
+            self.header.set("Content-Length", &data.len().to_string());
+            self.send_header()?;
+        } else {
+            return Err(io::Error::new(io::ErrorKind::Other, "HTTP header is already sent. Cannot send it again."));
         }
 
         let sock = Write::by_ref(&mut self.socket);
+        sock.write(data)?;
 
-        sock.write(Self::get_chunk_size(msg).as_bytes())?;
-        sock.write(CRLF.as_bytes())?;
-
-        sock.write(msg.as_bytes())?;
-        sock.write(CRLF.as_bytes())?;
-
-        if !self.has_body {
-            self.has_body = true;
+        self.sock_close()
+    }
+    pub fn json(&mut self, value: &impl Serialize) -> Result<(), io::Error> {
+        self.content_type("application/json");
+        let data = serde_json::to_string(value)?;
+        self.send(data)
+    }
+    pub fn content_type(&mut self, value: &str) -> &mut Self {
+        self.header.set("Content-Type", value);
+        self
+    }
+    pub fn redirect(&mut self, location: &str) -> Result<(), io::Error> {
+        self.status(302);
+        self.header.set("Location", location);
+        self.end()
+    }
+    fn get_file_name(path: &str) -> Result<&str, io::Error> {
+        /* Will this work on Windows? */
+        let path = Path::new(path);
+        if !path.metadata()?.is_file() {
+            return Err(io::Error::new(io::ErrorKind::Other, "Not a file"))
         }
+        Ok(path.file_name().unwrap().to_str().unwrap())
+    }
+    pub fn send_file(&mut self, path: &str) -> Result<(), io::Error> {
+        let path = Path::new(path);
+        let mime = mime_guess::from_path(path).first_or_octet_stream();
+        self.content_type(mime.essence_str());
 
-        Ok(())
+        let mut data = Vec::new();
+        File::open(path)?.read_to_end(&mut data)?;
+        self.send(&data[..])
+    }
+    pub fn download(&mut self, path: &str) -> Result<(), io::Error> {
+        let file_name = Self::get_file_name(path)?;
+        self.header.set("Content-Disposition", &(format!("attachment; filename={}", file_name)));
+        self.send_file(path)
     }
 }
 
