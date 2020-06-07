@@ -1,12 +1,10 @@
-mod http_server;
-mod consume;
+extern crate http_server;
 
-use http_server::HttpServer;
+use http_server::http_server::HttpServer;
 use serde::{Serialize, Deserialize};
 use std::io;
-use serde_json::Result as SerdeResult;
-use consume::Consume;
-use std::convert::From;
+use std::path::Path;
+//use serde_json::Result as SerdeResult;
 
 const SERVER_IP: &str = "127.0.0.1";
 const SERVER_PORT: u16 = 3000;
@@ -23,6 +21,8 @@ struct HelloResponse {
 
 fn main() {
     let mut server = HttpServer::new();
+
+    server.static_path("/public", Path::new("public"));
 
     server.get("/", | _request, mut response | {
         let mut handler = || -> Result<(), io::Error> {
@@ -69,7 +69,7 @@ fn main() {
 
     server.get("/file/json", | _request, mut response | {
         let mut handler = || -> Result<(), io::Error> {
-            response.send_file("test.json")
+            response.send_file(Path::new("test.json"))
         };
         if let Err(x) = handler() {
             eprintln!("Error: {}", x);
@@ -78,7 +78,7 @@ fn main() {
 
     server.get("/file/image", | _request, mut response | {
         let mut handler = || -> Result<(), io::Error> {
-            response.send_file("/home/debian/workspace/wazahm/soap-bubble.jpg")
+            response.send_file(Path::new("/home/debian/workspace/wazahm/soap-bubble.jpg"))
         };
         if let Err(x) = handler() {
             eprintln!("Error: {}", x);
@@ -87,7 +87,7 @@ fn main() {
 
     server.get("/file/octet", | _request, mut response | {
         let mut handler = || -> Result<(), io::Error> {
-            response.send_file("/home/debian/workspace/wazahm/soap-bubble")
+            response.send_file(Path::new("/home/debian/workspace/wazahm/soap-bubble"))
         };
         if let Err(x) = handler() {
             eprintln!("Error: {}", x);
@@ -96,7 +96,7 @@ fn main() {
 
     server.get("/download", | _request, mut response | {
         let mut handler = || -> Result<(), io::Error> {
-            response.download("/home/debian/workspace/wazahm/soap-bubble.jpg")
+            response.download(Path::new("/home/debian/workspace/wazahm/soap-bubble.jpg"))
         };
         if let Err(x) = handler() {
             eprintln!("Error: {}", x);
