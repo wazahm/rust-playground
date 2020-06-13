@@ -8,6 +8,7 @@ use serde::Serialize;
 use mime_guess;
 
 use super::*;
+use super::http_request::HttpRequest;
 use super::http_header::HttpHeader;
 use super::to_bytes::ToBytes;
 
@@ -35,23 +36,23 @@ struct HttpResponseStatus {
     reason: String
 }
 
-pub struct HttpResponse {
+pub struct HttpResponse<'a> {
     status: HttpResponseStatus,
     pub header: HttpHeader,
     header_sent: bool,
     chunked_body: bool,
     body: Vec<u8>,
-    socket: TcpStream
+    socket: &'a mut TcpStream
 }
 
-pub fn new(socket: TcpStream) -> HttpResponse {
+pub fn new<'a>(socket: &'a mut TcpStream, request: &HttpRequest) -> HttpResponse<'a> {
     let status = HttpResponseStatus {
         code: DEFAULT_RESPONSE_STATUS_CODE,
         reason: DEFAULT_RESPONSE_STATUS_REASON.to_string()
     };
 
     let mut header = http_header::new();
-    HttpResponse::add_default_headers(&mut header);
+    HttpResponse::add_default_headers(&request.header, &mut header);
 
     HttpResponse {
         status,
@@ -63,13 +64,19 @@ pub fn new(socket: TcpStream) -> HttpResponse {
     }
 }
 
-impl HttpResponse {
-    fn add_default_headers(header: &mut HttpHeader) {
-        header.set("Connection", "close");
+impl<'a> HttpResponse<'a> {
+    fn add_default_headers(req_header: &HttpHeader, res_header: &mut HttpHeader) {
+        if req_header.get("connection").to_lowercase() == "keep-alive" {
+            res_header.set("Connection", "keep-alive");
+        }
+        else {
+            res_header.set("Connection", "close");
+        }
     }
     fn send_header(&mut self) -> Result<(), io::Error> {
-        let sock = Write::by_ref(&mut self.socket);
-        let mut line = String::from(HTTP_VERSION).add(" ")
+        let sock = Write::by_ref(self.socket);
+        let http_version = HttpVersion::V1_1.to_str();
+        let mut line = String::from(http_version).add(" ")
                         .add(&self.status.code.to_string()).add(" ")
                         .add(&self.status.reason).add(CRLF);
         sock.write(line.as_bytes())?;
@@ -85,11 +92,6 @@ impl HttpResponse {
         self.header_sent = true;
 
         Ok(())
-    }
-    fn sock_close(&mut self) -> Result<(), io::Error> {
-        let sock = Write::by_ref(&mut self.socket);
-        sock.flush()?;
-        sock.shutdown(Shutdown::Both)
     }
     fn get_chunk_size(chunk: &[u8]) -> String {
         return format!("{:X}", chunk.len());
@@ -119,7 +121,7 @@ impl HttpResponse {
             self.send_header()?;
         }
 
-        let sock = Write::by_ref(&mut self.socket);
+        let sock = Write::by_ref(self.socket);
 
         let data = data.to_bytes();
         sock.write(Self::get_chunk_size(data).as_bytes())?;
@@ -134,33 +136,41 @@ impl HttpResponse {
 
         Ok(())
     }
+    fn _end(&mut self) -> Result<(), io::Error> {
+        let sock = Write::by_ref(self.socket);
+        sock.flush()?;
+        if self.header.get("connection") == "close" {
+            sock.shutdown(Shutdown::Both)?;
+        }
+        Ok(())
+    }
     pub fn end(&mut self) -> Result<(), io::Error> {
         if !self.header_sent {
             self.send_header()?;
         }
 
-        let sock = Write::by_ref(&mut self.socket);
+        let sock = Write::by_ref(self.socket);
 
         if self.chunked_body {
             sock.write(&['0' as u8])?;
             sock.write(DOUBLE_CRLF.as_bytes())?;
         }
-        self.sock_close()
+        self._end()
     }
     pub fn send(&mut self, data: impl ToBytes) -> Result<(), io::Error> {
         let data = data.to_bytes();
 
         if !self.header_sent {
-            self.header.set("Content-Length", &data.len().to_string());
+            self.header.set("content-length", &data.len().to_string());
             self.send_header()?;
         } else {
             return Err(io::Error::new(io::ErrorKind::Other, "HTTP header is already sent. Cannot send it again."));
         }
 
-        let sock = Write::by_ref(&mut self.socket);
+        let sock = Write::by_ref(self.socket);
         sock.write(data)?;
 
-        self.sock_close()
+        self._end()
     }
     pub fn json(&mut self, value: &impl Serialize) -> Result<(), io::Error> {
         self.content_type("application/json");

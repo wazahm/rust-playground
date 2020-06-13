@@ -1,5 +1,5 @@
+extern crate log;
 extern crate http_server;
-
 use http_server::http_server::HttpServer;
 use serde::{Serialize, Deserialize};
 use std::io;
@@ -20,11 +20,13 @@ struct HelloResponse {
 }
 
 fn main() {
+    env_logger::init();
+
     let mut server = HttpServer::new();
 
     server.static_path("/public", Path::new("public"));
 
-    server.get("/", | _request, mut response | {
+    server.get("/", | _request, response | {
         let mut handler = || -> Result<(), io::Error> {
             response.redirect("/hi")
         };
@@ -33,7 +35,7 @@ fn main() {
         }
     });
 
-    server.get("/hello-world", | _request, mut response | {
+    server.get("/hello-world", | _request, response | {
         let mut handler = || -> Result<(), io::Error> {
             response.status(200);
             response.write("Hello ")?;
@@ -46,7 +48,7 @@ fn main() {
         }
     });
 
-    server.get("/hello", | _request, mut response | {
+    server.get("/hello", | _request, response | {
         let mut handler = || -> Result<(), io::Error> {
             let hello_str = String::from("Hello");
             let msg = HelloResponse { message: hello_str };
@@ -57,7 +59,7 @@ fn main() {
         }
     });
 
-    server.get("/hi", | _request, mut response | {
+    server.get("/hi", | _request, response | {
         let mut handler = || -> Result<(), io::Error> {
             response.content_type("text/html");
             response.status(200).send("<h1>Hello!</h1>")
@@ -67,7 +69,7 @@ fn main() {
         }
     });
 
-    server.get("/file/json", | _request, mut response | {
+    server.get("/file/json", | _request, response | {
         let mut handler = || -> Result<(), io::Error> {
             response.send_file(Path::new("test.json"))
         };
@@ -76,7 +78,7 @@ fn main() {
         }
     });
 
-    server.get("/file/image", | _request, mut response | {
+    server.get("/file/image", | _request, response | {
         let mut handler = || -> Result<(), io::Error> {
             response.send_file(Path::new("/home/debian/workspace/wazahm/soap-bubble.jpg"))
         };
@@ -85,7 +87,7 @@ fn main() {
         }
     });
 
-    server.get("/file/octet", | _request, mut response | {
+    server.get("/file/octet", | _request, response | {
         let mut handler = || -> Result<(), io::Error> {
             response.send_file(Path::new("/home/debian/workspace/wazahm/soap-bubble"))
         };
@@ -94,7 +96,7 @@ fn main() {
         }
     });
 
-    server.get("/download", | _request, mut response | {
+    server.get("/download", | _request, response | {
         let mut handler = || -> Result<(), io::Error> {
             response.download(Path::new("/home/debian/workspace/wazahm/soap-bubble.jpg"))
         };
